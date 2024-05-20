@@ -31,19 +31,14 @@ func LogObjectInfo(fn string, logCh <-chan ObjectInfo, wg *sync.WaitGroup) {
 			data, err := json.Marshal(object_info)
 			if err != nil {
 				log.Fatal("Error marshaling object info for key '", object_info.Key, "': ", err)
-				continue
 			}
 			_, err = file.Write(data)
 			if err != nil {
 				log.Fatal("Error writing object info for key '", object_info.Key, "': ", err)
-				log.Fatal("Abort writing")
-				break
 			}
 			_, err = file.WriteString("\n")
 			if err != nil {
 				log.Fatal("Error writing eol for key '", object_info.Key, "': ", err)
-				log.Fatal("Abort writing")
-				break
 			}
 		}
 

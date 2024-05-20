@@ -782,7 +782,7 @@ func runDelete(thread_num int, stats *Stats) {
 }
 
 func runBucketDelete(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	for {
 		bucket_num := atomic.AddInt64(&op_counter, 1)
@@ -795,7 +795,7 @@ func runBucketDelete(thread_num int, stats *Stats) {
 		}
 
 		start := time.Now().UnixNano()
-		_, err := svc.DeleteBucket(r)
+		_, err := svcL[0].DeleteBucket(r)
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
 
@@ -809,7 +809,7 @@ func runBucketDelete(thread_num int, stats *Stats) {
 }
 
 func runBucketList(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	marker := ""
 	bucket_num := rand.Int63() % bucket_count
@@ -819,7 +819,7 @@ func runBucketList(thread_num int, stats *Stats) {
 		}
 
 		start := time.Now().UnixNano()
-		p, err := svc.ListObjects(&s3.ListObjectsInput{
+		p, err := svcL[0].ListObjects(&s3.ListObjectsInput{
 			Bucket:  &buckets[bucket_num],
 			Marker:  &marker,
 			MaxKeys: &max_keys,
@@ -852,7 +852,7 @@ func runBucketList(thread_num int, stats *Stats) {
 var cfg *aws.Config
 
 func runBucketsInit(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	for {
 		bucket_num := atomic.AddInt64(&op_counter, 1)
@@ -862,7 +862,7 @@ func runBucketsInit(thread_num int, stats *Stats) {
 		}
 		start := time.Now().UnixNano()
 		in := &s3.CreateBucketInput{Bucket: aws.String(buckets[bucket_num])}
-		_, err := svc.CreateBucket(in)
+		_, err := svcL[0].CreateBucket(in)
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
 
