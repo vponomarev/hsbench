@@ -30,7 +30,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +65,8 @@ var app_context context.Context
 var workload_profile_file string
 var workload_profile_name string
 var workload_config WorkloadConfig
+
+var profiler_port string
 
 func processAWSError(err error) {
 	if err == nil {
@@ -558,8 +562,8 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 		req, _ := svcL[iterator%int64(len(svcL))].PutObjectRequest(r)
 
 		// Set up operation timeout if requested
+		ctx, ctxCancel := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 		if op_timeout > 0 {
-			ctx, _ := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 			req.HTTPRequest = req.HTTPRequest.Clone(ctx)
 		}
 
@@ -568,6 +572,8 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 		err := req.Send()
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
+
+		ctxCancel()
 
 		errText := ""
 		if err != nil {
@@ -675,14 +681,16 @@ func runDownload(thread_num int, fendtime time.Time, stats *Stats) {
 		req, resp := svcL[iterator%int64(len(svcL))].GetObjectRequest(r)
 
 		// Set up operation timeout if requested
+		ctx, ctxCancel := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 		if op_timeout > 0 {
-			ctx, _ := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 			req.HTTPRequest = req.HTTPRequest.Clone(ctx)
 		}
 
 		err := req.Send()
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
+
+		ctxCancel()
 
 		processAWSError(err)
 		if err != nil {
@@ -1003,19 +1011,19 @@ func runWrapper(loop int, r rune) []OutputStats {
 	}
 
 	// Create the Output Stats
-	os := make([]OutputStats, 0)
+	outStats := make([]OutputStats, 0)
 	for i := int64(0); i >= 0; i++ {
 		if o, ok := stats.makeOutputStats(i); ok {
-			os = append(os, o)
+			outStats = append(outStats, o)
 		} else {
 			break
 		}
 	}
 	if o, ok := stats.makeTotalStats(); ok {
 		o.log()
-		os = append(os, o)
+		outStats = append(outStats, o)
 	}
-	return os
+	return outStats
 }
 
 func init() {
@@ -1048,6 +1056,7 @@ func init() {
 	myflag.Float64Var(&interval, "ri", 1.0, "Number of seconds between report intervals")
 	myflag.StringVar(&workload_profile_file, "wp", "", "Name of workload profile file")
 	myflag.StringVar(&workload_profile_name, "p", "", "Name of workload profile (default: first one)")
+	myflag.StringVar(&profiler_port, "pp", "", "HTTP port for profiler listening (default: '', no profiler enabled)")
 	// define custom usage output with notes
 	notes :=
 		`
@@ -1095,9 +1104,19 @@ NOTES:
 		workload_config.AddWorkloadProfile("", 1, ranged_size, ranged_offset)
 	}
 
+	var url_host_list []string
+	{
+		re := regexp.MustCompile(" +")
+		for _, v := range re.Split(url_host, -1) {
+			if v != "" {
+				url_host_list = append(url_host_list, v)
+			}
+		}
+	}
+
 	// Configure S3 profile
 	if len(workload_config.S3Config) < 1 {
-		workload_config.AddS3Config("default", []string{url_host}, access_key, secret_key)
+		workload_config.AddS3Config("default", url_host_list, access_key, secret_key)
 	} else {
 		// Fill empty fields with ENV values
 		for i, d := range workload_config.S3Config {
@@ -1108,7 +1127,7 @@ NOTES:
 				workload_config.S3Config[i].SecretKey = secret_key
 			}
 			if len(d.Endpoints) < 1 {
-				workload_config.S3Config[i].Endpoints = []string{url_host}
+				workload_config.S3Config[i].Endpoints = url_host_list
 			}
 		}
 	}
@@ -1226,6 +1245,14 @@ func main() {
 
 	// Setup map of objects info
 	object_info_chan = make(chan ObjectInfo, 1000)
+
+	// Activate profiler if enabled
+	if profiler_port != "" {
+		go func() {
+			fmt.Println("Starting profiler listen on port:", profiler_port)
+			fmt.Println(http.ListenAndServe("localhost:"+profiler_port, nil))
+		}()
+	}
 
 	// Write objects info
 	wg := sync.WaitGroup{}

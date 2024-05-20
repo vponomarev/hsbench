@@ -27,12 +27,12 @@ s3:
     secret_key: ""
 
 ```
+*   It's also possible to specify multiple endpoints as a space separated parameter `-u`: `-u "http://endpoint1/ http://endpoint2/ http://endpoint3/"` 
 
 ## Limitations
 
-*	hsbench does not currently support multiple AWS endpoints
 *	hsbench has no built-in provisions for making graphs
-*	hsbench does not yet support mixed IO workloads
+*	hsbench limited support of mixed IO workloads 
 *	hsbench is still in alpha and options/output may change at any moment
 
 ## Prerequisites
@@ -66,39 +66,55 @@ USAGE: ./hsbench [OPTIONS]
 
 OPTIONS:
   -a string
-    	Access key
+        Access key
   -b int
-    	Number of buckets to distribute IOs across (default 1)
+        Number of buckets to distribute IOs across (default 1)
+  -bl string
+        Use space-separated list of buckets for testing, not <prefix>000000000000
   -bp string
-    	Prefix for buckets (default "hotsauce_bench")
+        Prefix for buckets (default "hotsauce-bench")
+  -cl string
+        Storage class to use
   -d int
-    	Maximum test duration in seconds <-1 for unlimited> (default 60)
+        Maximum test duration in seconds <-1 for unlimited> (default 60)
+  -f int
+        Object number to start with
   -j string
-    	Write JSON output to this file
+        Write JSON output to this file
   -l int
-    	Number of times to repeat test (default 1)
+        Number of times to repeat test (default 1)
   -m string
-    	Run modes in order.  See NOTES for more info (default "cxiplgdcx")
+        Run modes in order.  See NOTES for more info (default "cxiplgdcx")
   -mk int
-    	Maximum number of keys to retreive at once for bucket listings (default 1000)
+        Maximum number of keys to retreive at once for bucket listings (default 1000)
+  -mz string
+        Minimum size of objects in bytes with postfix K, M, and G
   -n int
-    	Maximum number of objects <-1 for unlimited> (default -1)
+        Maximum number of objects <-1 for unlimited> (default -1)
   -o string
-    	Write CSV output to this file
+        Write CSV output to this file
+  -oj string
+        Detailed log for object operations
   -op string
-    	Prefix for objects
+        Prefix for objects
   -r string
-    	Region for testing (default "us-east-1")
+        Region for testing (default "us-east-1")
   -ri float
-    	Number of seconds between report intervals (default 1)
+        Number of seconds between report intervals (default 1)
+  -ro int
+        GET Ranged request: offset (bytes)
+  -rs int
+        GET Ranged request: size (bytes)
   -s string
-    	Secret key
+        Secret key
   -t int
-    	Number of threads to run (default 1)
+        Number of threads to run (default 1)
+  -tt int
+        Timeout for GET/PUT operations (in ms)
   -u string
-    	URL for host with method prefix
+        URL for host with method prefix
   -z string
-    	Size of objects in bytes with postfix K, M, and G (default "1M")
+        Size of objects in bytes with postfix K, M, and G (default "1M")
 
 NOTES:
   - Valid mode types for the -m mode string are:
@@ -107,7 +123,7 @@ NOTES:
     i: initialize buckets 
     p: put objects in buckets
     l: list objects in buckets
-    g: get objects from buckets
+    g: get objects from buckets (randomly when object count is known, sequentally otherwise)
     d: delete objects from buckets 
 
     These modes are processed in-order and can be repeated, ie "ippgd" will
@@ -119,6 +135,7 @@ NOTES:
     maximum number of keys returned to 1000 even if MaxKeys is set higher.
     hsbench will attempt to set MaxKeys to whatever value is passed via the 
     "mk" flag, but it's likely that any values above 1000 will be ignored.
+
 ```
 
 ## Example Benchmark
