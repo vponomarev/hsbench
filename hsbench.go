@@ -46,6 +46,13 @@ const (
 	ErrContextDeadlineExceeded = "context deadline exceeded"
 )
 
+var (
+	BuildTime  string
+	CommitHash string
+	GoVersion  string
+	GitTag     string
+)
+
 // Global variables
 var access_key, secret_key, url_host, bucket_prefix, bucket_list, object_prefix, region, modes, storage_class, output, json_output, minSizeArg, sizeArg string
 var op_timeout int64
@@ -906,6 +913,26 @@ func runPagedList(wg *sync.WaitGroup, bucket_num int64, list chan<- pagedObject)
 	wg.Done()
 }
 
+/*
+func runPagedListMultiparts(wg *sync.WaitGroup, bucket_num int64, list chan<- pagedObject) {
+	svcL := GetS3Services("")
+	svcL[0].ListMultipartUploadsPages(&s3.ListMultipartUploadsInput{
+		Bucket:     &buckets[bucket_num],
+		MaxUploads: &max_keys,
+	},
+		func(page *s3.ListMultipartUploadsOutput, last bool) bool {
+			for _, v := range page {
+				list <- pagedObject{
+					bucket_num: bucket_num,
+					key:        v,
+					size:       0,
+				}
+			}
+		},
+	)
+}
+*/
+
 func runBucketsClear(list <-chan pagedObject, thread_num int, stats *Stats) {
 	iterator := int64(-1)
 	svcL := GetS3Services("")
@@ -1027,6 +1054,9 @@ func runWrapper(loop int, r rune) []OutputStats {
 }
 
 func init() {
+	// Hello
+	log.Printf("Hotsauce S3 Benchmark Version 0.x DEV (" + BuildTime + ")")
+
 	// Parse command line
 	myflag := flag.NewFlagSet("myflag", flag.ExitOnError)
 	myflag.StringVar(&access_key, "a", os.Getenv("AWS_ACCESS_KEY_ID"), "Access key")
@@ -1114,6 +1144,12 @@ NOTES:
 		}
 	}
 
+	if len(url_host_list) < 1 {
+		log.Println("Error: url_host is not specified")
+		log.Println("run with -h flag for help")
+		os.Exit(1)
+	}
+
 	// Configure S3 profile
 	if len(workload_config.S3Config) < 1 {
 		workload_config.AddS3Config("default", url_host_list, access_key, secret_key)
@@ -1196,8 +1232,6 @@ func generateSeed(key string, ts uint64) int64 {
 }
 
 func main() {
-	// Hello
-	log.Printf("Hotsauce S3 Benchmark Version 0.x DEV")
 
 	app_context = context.TODO()
 
