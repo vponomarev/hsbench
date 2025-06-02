@@ -30,7 +30,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +44,13 @@ import (
 const (
 	ErrContextRequestCancelled = "request context canceled"
 	ErrContextDeadlineExceeded = "context deadline exceeded"
+)
+
+var (
+	BuildTime  string
+	CommitHash string
+	GoVersion  string
+	GitTag     string
 )
 
 // Global variables
@@ -63,6 +72,8 @@ var app_context context.Context
 var workload_profile_file string
 var workload_profile_name string
 var workload_config WorkloadConfig
+
+var profiler_port string
 
 func processAWSError(err error) {
 	if err == nil {
@@ -558,8 +569,8 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 		req, _ := svcL[iterator%int64(len(svcL))].PutObjectRequest(r)
 
 		// Set up operation timeout if requested
+		ctx, ctxCancel := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 		if op_timeout > 0 {
-			ctx, _ := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 			req.HTTPRequest = req.HTTPRequest.Clone(ctx)
 		}
 
@@ -568,6 +579,8 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 		err := req.Send()
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
+
+		ctxCancel()
 
 		errText := ""
 		if err != nil {
@@ -675,14 +688,16 @@ func runDownload(thread_num int, fendtime time.Time, stats *Stats) {
 		req, resp := svcL[iterator%int64(len(svcL))].GetObjectRequest(r)
 
 		// Set up operation timeout if requested
+		ctx, ctxCancel := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 		if op_timeout > 0 {
-			ctx, _ := context.WithTimeout(app_context, time.Duration(op_timeout)*time.Millisecond)
 			req.HTTPRequest = req.HTTPRequest.Clone(ctx)
 		}
 
 		err := req.Send()
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
+
+		ctxCancel()
 
 		processAWSError(err)
 		if err != nil {
@@ -774,7 +789,7 @@ func runDelete(thread_num int, stats *Stats) {
 }
 
 func runBucketDelete(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	for {
 		bucket_num := atomic.AddInt64(&op_counter, 1)
@@ -787,7 +802,7 @@ func runBucketDelete(thread_num int, stats *Stats) {
 		}
 
 		start := time.Now().UnixNano()
-		_, err := svc.DeleteBucket(r)
+		_, err := svcL[0].DeleteBucket(r)
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
 
@@ -801,7 +816,7 @@ func runBucketDelete(thread_num int, stats *Stats) {
 }
 
 func runBucketList(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	marker := ""
 	bucket_num := rand.Int63() % bucket_count
@@ -811,7 +826,7 @@ func runBucketList(thread_num int, stats *Stats) {
 		}
 
 		start := time.Now().UnixNano()
-		p, err := svc.ListObjects(&s3.ListObjectsInput{
+		p, err := svcL[0].ListObjects(&s3.ListObjectsInput{
 			Bucket:  &buckets[bucket_num],
 			Marker:  &marker,
 			MaxKeys: &max_keys,
@@ -844,7 +859,7 @@ func runBucketList(thread_num int, stats *Stats) {
 var cfg *aws.Config
 
 func runBucketsInit(thread_num int, stats *Stats) {
-	svc := s3.New(session.New(), cfg)
+	svcL := GetS3Services("")
 
 	for {
 		bucket_num := atomic.AddInt64(&op_counter, 1)
@@ -854,7 +869,7 @@ func runBucketsInit(thread_num int, stats *Stats) {
 		}
 		start := time.Now().UnixNano()
 		in := &s3.CreateBucketInput{Bucket: aws.String(buckets[bucket_num])}
-		_, err := svc.CreateBucket(in)
+		_, err := svcL[0].CreateBucket(in)
 		end := time.Now().UnixNano()
 		stats.updateIntervals(thread_num)
 
@@ -897,6 +912,26 @@ func runPagedList(wg *sync.WaitGroup, bucket_num int64, list chan<- pagedObject)
 		})
 	wg.Done()
 }
+
+/*
+func runPagedListMultiparts(wg *sync.WaitGroup, bucket_num int64, list chan<- pagedObject) {
+	svcL := GetS3Services("")
+	svcL[0].ListMultipartUploadsPages(&s3.ListMultipartUploadsInput{
+		Bucket:     &buckets[bucket_num],
+		MaxUploads: &max_keys,
+	},
+		func(page *s3.ListMultipartUploadsOutput, last bool) bool {
+			for _, v := range page {
+				list <- pagedObject{
+					bucket_num: bucket_num,
+					key:        v,
+					size:       0,
+				}
+			}
+		},
+	)
+}
+*/
 
 func runBucketsClear(list <-chan pagedObject, thread_num int, stats *Stats) {
 	iterator := int64(-1)
@@ -1003,22 +1038,25 @@ func runWrapper(loop int, r rune) []OutputStats {
 	}
 
 	// Create the Output Stats
-	os := make([]OutputStats, 0)
+	outStats := make([]OutputStats, 0)
 	for i := int64(0); i >= 0; i++ {
 		if o, ok := stats.makeOutputStats(i); ok {
-			os = append(os, o)
+			outStats = append(outStats, o)
 		} else {
 			break
 		}
 	}
 	if o, ok := stats.makeTotalStats(); ok {
 		o.log()
-		os = append(os, o)
+		outStats = append(outStats, o)
 	}
-	return os
+	return outStats
 }
 
 func init() {
+	// Hello
+	log.Printf("Hotsauce S3 Benchmark Version 0.x DEV (" + BuildTime + ")")
+
 	// Parse command line
 	myflag := flag.NewFlagSet("myflag", flag.ExitOnError)
 	myflag.StringVar(&access_key, "a", os.Getenv("AWS_ACCESS_KEY_ID"), "Access key")
@@ -1048,6 +1086,7 @@ func init() {
 	myflag.Float64Var(&interval, "ri", 1.0, "Number of seconds between report intervals")
 	myflag.StringVar(&workload_profile_file, "wp", "", "Name of workload profile file")
 	myflag.StringVar(&workload_profile_name, "p", "", "Name of workload profile (default: first one)")
+	myflag.StringVar(&profiler_port, "pp", "", "HTTP port for profiler listening (default: '', no profiler enabled)")
 	// define custom usage output with notes
 	notes :=
 		`
@@ -1095,9 +1134,25 @@ NOTES:
 		workload_config.AddWorkloadProfile("", 1, ranged_size, ranged_offset)
 	}
 
+	var url_host_list []string
+	{
+		re := regexp.MustCompile(" +")
+		for _, v := range re.Split(url_host, -1) {
+			if v != "" {
+				url_host_list = append(url_host_list, v)
+			}
+		}
+	}
+
+	if len(url_host_list) < 1 {
+		log.Println("Error: url_host is not specified")
+		log.Println("run with -h flag for help")
+		os.Exit(1)
+	}
+
 	// Configure S3 profile
 	if len(workload_config.S3Config) < 1 {
-		workload_config.AddS3Config("default", []string{url_host}, access_key, secret_key)
+		workload_config.AddS3Config("default", url_host_list, access_key, secret_key)
 	} else {
 		// Fill empty fields with ENV values
 		for i, d := range workload_config.S3Config {
@@ -1108,7 +1163,7 @@ NOTES:
 				workload_config.S3Config[i].SecretKey = secret_key
 			}
 			if len(d.Endpoints) < 1 {
-				workload_config.S3Config[i].Endpoints = []string{url_host}
+				workload_config.S3Config[i].Endpoints = url_host_list
 			}
 		}
 	}
@@ -1177,8 +1232,6 @@ func generateSeed(key string, ts uint64) int64 {
 }
 
 func main() {
-	// Hello
-	log.Printf("Hotsauce S3 Benchmark Version 0.x DEV")
 
 	app_context = context.TODO()
 
@@ -1226,6 +1279,14 @@ func main() {
 
 	// Setup map of objects info
 	object_info_chan = make(chan ObjectInfo, 1000)
+
+	// Activate profiler if enabled
+	if profiler_port != "" {
+		go func() {
+			fmt.Println("Starting profiler listen on port:", profiler_port)
+			fmt.Println(http.ListenAndServe("localhost:"+profiler_port, nil))
+		}()
+	}
 
 	// Write objects info
 	wg := sync.WaitGroup{}
